@@ -1,5 +1,4 @@
 import datetime
-import json
 import math
 import os
 import random
@@ -8,14 +7,6 @@ import tempfile
 from io import BytesIO
 from PIL import Image
 import streamlit as st
-
-# Google GenAI SDK Import
-try:
-  import google.generativeai as genai
-
-  GEMINI_AVAILABLE = True
-except ImportError:
-  GEMINI_AVAILABLE = False
 
 # Check for optional libraries
 try:
@@ -126,11 +117,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Automatically load API key from Streamlit Cloud Secrets
-GEMINI_API_KEY = (
-    st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else ""
-)
-
 # ==========================================
 # FLOCK & PARAMETERS INPUT
 # ==========================================
@@ -167,17 +153,15 @@ vaccine_choice = st.selectbox(
 )
 
 # ==========================================
-# DATA INPUT MODES (Manual / PDF / AI Camera)
+# DATA INPUT MODES (Manual Entry / PDF Report)
 # ==========================================
 st.markdown("---")
 st.markdown("### 🧫 Titer Data Input")
 input_mode = st.radio(
-    "Choose Input Method",
-    ["Manual Entry", "Upload PDF Report", "AI Camera Extraction"],
-    horizontal=True,
+    "Choose Input Method", ["Manual Entry", "Upload PDF Report"], horizontal=True
 )
 
-titers = []
+titernumbers = []
 
 if input_mode == "Manual Entry":
   if "num_samples" not in st.session_state:
@@ -236,6 +220,7 @@ if input_mode == "Manual Entry":
 
   st.markdown("<br>", unsafe_allow_html=True)
 
+  # Sequential Row-by-Row Grid (1, 2, 3...)
   for i in range(0, st.session_state.num_samples, 2):
     row_cols = st.columns(2)
 
@@ -249,7 +234,7 @@ if input_mode == "Manual Entry":
         try:
           v1 = float(val_str1.strip())
           if v1 >= 0:
-            titers.append(v1)
+            titernumbers.append(v1)
         except ValueError:
           pass
 
@@ -264,11 +249,17 @@ if input_mode == "Manual Entry":
           try:
             v2 = float(val_str2.strip())
             if v2 >= 0:
-              titers.append(v2)
+              titernumbers.append(v2)
           except ValueError:
             pass
 
-elif input_mode == "Upload PDF Report":
+  if len(titernumbers) < 5:
+    st.warning(
+        f"You currently have {len(titernumbers)} valid titers. Please provide"
+        " at least 5 samples to perform calculations."
+    )
+
+else:  # Upload PDF Report Mode
   uploaded_file = st.file_uploader("Upload ELISA PDF Report", type=["pdf"])
   if uploaded_file:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
@@ -276,114 +267,41 @@ elif input_mode == "Upload PDF Report":
       tmp_path = tmp.name
 
     try:
+      extracted_from_pdf = []
       if PDFPLUMBER_AVAILABLE:
         with pdfplumber.open(tmp_path) as pdf:
           for page in pdf.pages:
             txt = page.extract_text() or ""
-            found = re.findall(r"\b([1-9]\d{3,4})\b", txt)
-            for f in found:
-              val = float(f)
-              if 100 <= val <= 45000:
-                titers.append(val)
-      st.success(f"Successfully extracted {len(titers)} titers from PDF!")
+            lines = txt.split("\n")
+            for line in lines:
+              # Target lines that look like sample rows (e.g. starting with sample numbers or well codes like F01, G01)
+              if re.search(
+                  r"\b(0[1-9]|1[0-8]|[1-9])\b", line
+              ) and not line.startswith("Report:"):
+                numbers_in_line = re.findall(r"\b([1-9]\d{2,4})\b", line)
+                for num_str in numbers_in_line:
+                  val = float(num_str)
+                  # Filter strictly for valid ELISA titer ranges (100 to 45000)
+                  if 100 <= val <= 45000 and val not in extracted_from_pdf:
+                    extracted_from_pdf.append(val)
+
+        # Fallback if specific row parsing missed anything
+        if len(extracted_from_pdf) < 5:
+          all_nums = re.findall(r"\b([1-9]\d{3,4})\b", txt)
+          for num_str in all_nums:
+            val = float(num_str)
+            if 100 <= val <= 45000 and val not in extracted_from_pdf:
+              extracted_from_pdf.append(val)
+
+      titernumbers = extracted_from_pdf
+      st.success(
+          f"Successfully extracted {len(titernumbers)} titers from PDF!"
+      )
     except Exception as e:
       st.error(f"Error reading PDF: {e}")
     finally:
       if os.path.exists(tmp_path):
         os.remove(tmp_path)
-
-else:  # AI Camera Extraction Mode
-  st.markdown(
-      "📱 **AI Vision Report Scanner:** Take or upload a photo of your ELISA"
-      " laboratory report. The embedded Gemini AI agent will read every row in"
-      " the table from top to bottom and extract all 18 sample titers"
-      " automatically."
-  )
-
-  ai_photo = st.file_uploader(
-      "📸 Upload Lab Report Photo", type=["jpg", "jpeg", "png"]
-  )
-  if ai_photo:
-    img = Image.open(ai_photo)
-    st.image(
-        img,
-        caption="Uploaded Report Preview",
-        use_container_width=True,
-    )
-
-    if st.button(
-        "✨ Extract All Titers with AI Agent",
-        type="primary",
-        use_container_width=True,
-    ):
-      if not GEMINI_API_KEY:
-        st.error(
-            "GEMINI_API_KEY is missing from Streamlit Cloud Secrets. Please add"
-            " it in your app settings."
-        )
-      elif not GEMINI_AVAILABLE:
-        st.error(
-            "The 'google-generativeai' library is missing from requirements.txt."
-        )
-      else:
-        with st.spinner(
-            "🤖 AI Agent is scanning the report table and extracting all"
-            " titers..."
-        ):
-          try:
-            genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel("gemini-3.8-flash")
-
-            prompt = (
-                "Analyze this veterinary ELISA report image carefully. Look at"
-                " the data table at the bottom containing Sample ID, Well, OD,"
-                " S/P Ratio, Titer, and Result. Extract EVERY SINGLE sample"
-                " titer value listed in the table sequentially from Sample 1 to"
-                " the final sample (e.g., Sample 18). Return ONLY a valid JSON"
-                " list of numbers representing the titers in order, for"
-                " example: [3427, 1824, 1118, ...]. Do not miss any rows."
-            )
-
-            response = model.generate_content([prompt, img])
-            text_resp = response.text.strip()
-
-            match = re.search(r"\[.*?\]", text_resp, re.DOTALL)
-            if match:
-              extracted_list = json.loads(match.group(0))
-              extracted_titers = [float(t) for t in extracted_list]
-
-              if extracted_titers:
-                st.session_state.num_samples = len(extracted_titers)
-                for idx, tval in enumerate(extracted_titers):
-                  st.session_state[f"t_val_{idx}"] = str(int(tval))
-                st.success(
-                    f"🎉 Successfully extracted {len(extracted_titers)}"
-                    " sample titers using AI Vision!"
-                )
-                st.rerun()
-              else:
-                st.warning(
-                    "AI could not detect titers. Please try a clearer photo."
-                )
-            else:
-              st.error(
-                  "Could not parse AI response. Please try clicking the button"
-                  " again."
-              )
-          except Exception as e:
-            st.error(f"AI Extraction Error: {str(e)}")
-
-# Re-scan state inputs for calculation
-titers = []
-for i in range(st.session_state.get("num_samples", 18)):
-  val_str = st.session_state.get(f"t_val_{i}", "")
-  if val_str.strip():
-    try:
-      v = float(val_str.strip())
-      if v >= 0:
-        titers.append(v)
-    except ValueError:
-      pass
 
 # ==========================================
 # CALCULATION & RESULTS
@@ -405,24 +323,26 @@ def calculate_percentile(data, percentile):
 
 st.markdown("---")
 if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_width=True):
-  if len(titers) < 5:
+  if len(titernumbers) < 5:
     st.warning(
-        f"You currently have {len(titers)} valid titers. Please provide at"
-        " least 5 samples to perform calculations."
+        f"You currently have {len(titernumbers)} valid titers. Please provide"
+        " at least 5 samples to perform calculations."
     )
   else:
-    n = len(titers)
-    mean_titer = sum(titers) / n
-    min_titer = min(titers)
-    max_titer = max(titers)
+    n = len(titernumbers)
+    mean_titer = sum(titernumbers) / n
+    min_titer = min(titernumbers)
+    max_titer = max(titernumbers)
     variance = (
-        sum((x - mean_titer) ** 2 for x in titers) / (n - 1) if n > 1 else 0
+        sum((x - mean_titer) ** 2 for x in titernumbers) / (n - 1)
+        if n > 1
+        else 0
     )
     std_dev = math.sqrt(variance)
     cv = (std_dev / mean_titer * 100) if mean_titer > 0 else 0
 
-    titer_25 = calculate_percentile(titers, 0.25)
-    titer_75 = calculate_percentile(titers, 0.75)
+    titer_25 = calculate_percentile(titernumbers, 0.25)
+    titer_75 = calculate_percentile(titernumbers, 0.75)
 
 
     def get_vac_age(target_titer, breakthrough):
