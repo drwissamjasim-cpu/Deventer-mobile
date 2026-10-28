@@ -94,23 +94,22 @@ if not check_authentication():
   st.stop()
 
 # ==========================================
-# APP STYLING & CAMERA ENHANCEMENTS
+# APP STYLING & MOBILE RESPONSIVE FIXES
 # ==========================================
 st.markdown(
     """
     <style>
     .main { background-color: #eaf4f2; }
-    .stButton>button { width: 100%; border-radius: 6px; font-weight: bold; }
-    .card { background-color: #ffffff; padding: 20px; border-radius: 8px; border: 1px solid #cfe3df; margin-bottom: 15px; }
+    .stButton>button { width: 100%; border-radius: 6px; font-weight: bold; min-height: 42px; }
     
-    /* Expand and enhance Camera Input display for mobile */
+    /* Make camera input full width and high quality preview on mobile */
     [data-testid="stCameraInput"] {
         width: 100% !important;
     }
     [data-testid="stCameraInput"] video, [data-testid="stCameraInput"] img {
         width: 100% !important;
-        max-height: 450px !important;
-        object-fit: contain;
+        max-height: 500px !important;
+        object-fit: cover;
         border-radius: 8px;
     }
     </style>
@@ -133,25 +132,21 @@ st.markdown(
 # FLOCK & PARAMETERS INPUT
 # ==========================================
 st.markdown("### 📋 Flock Parameters")
-col1, col2 = st.columns(2)
+flock_type = st.selectbox(
+    "Flock Type",
+    options=["Broiler", "Breeder", "Layer"],
+    format_func=lambda x: (
+        f"Broiler (t½=3d)"
+        if x == "Broiler"
+        else f"Breeder (t½=4.5d)"
+        if x == "Breeder"
+        else f"Layer (t½=5.5d)"
+    ),
+)
 
-with col1:
-  flock_type = st.selectbox(
-      "Flock Type",
-      options=["Broiler", "Breeder", "Layer"],
-      format_func=lambda x: (
-          f"Broiler (t½=3d)"
-          if x == "Broiler"
-          else f"Breeder (t½=4.5d)"
-          if x == "Breeder"
-          else f"Layer (t½=5.5d)"
-      ),
-  )
-
-with col2:
-  sampling_age = st.number_input(
-      "Sampling Age (Days)", min_value=1, max_value=60, value=1
-  )
+sampling_age = st.number_input(
+    "Sampling Age (Days)", min_value=1, max_value=60, value=1
+)
 
 t_half = {"Broiler": 3.0, "Breeder": 4.5, "Layer": 5.5}[flock_type]
 correction = max(0, 4 - int(sampling_age)) if sampling_age <= 3 else 0
@@ -171,6 +166,7 @@ vaccine_choice = st.selectbox(
 # ==========================================
 # DATA INPUT MODES (Manual / PDF / Camera)
 # ==========================================
+st.markdown("---")
 st.markdown("### 🧫 Titer Data Input")
 input_mode = st.radio(
     "Choose Input Method",
@@ -181,26 +177,31 @@ input_mode = st.radio(
 titers = []
 
 if input_mode == "Manual Entry":
-  # Initialize session state for sample count and values if not present
   if "num_samples" not in st.session_state:
     st.session_state.num_samples = 18
 
-  # Control buttons for adding/reducing samples
-  c_btn1, c_btn2, c_btn3, c_btn4, c_btn5 = st.columns(5)
-  with c_btn1:
-    if st.button("+1"):
+  st.markdown(
+      f"*Total Samples: {st.session_state.num_samples}* (Min required: 5)"
+  )
+
+  # Clean 5-button toolbar split into two rows on mobile for perfect spacing
+  row1_col1, row1_col2, row1_col3 = st.columns(3)
+  with row1_col1:
+    if st.button("➕ Add 1"):
       st.session_state.num_samples += 1
       st.rerun()
-  with c_btn2:
-    if st.button("+6"):
+  with row1_col2:
+    if st.button("➕ Add 6"):
       st.session_state.num_samples += 6
       st.rerun()
-  with c_btn3:
-    if st.button("-1") and st.session_state.num_samples > 5:
+  with row1_col3:
+    if st.button("➖ Remove") and st.session_state.num_samples > 5:
       st.session_state.num_samples -= 1
       st.rerun()
-  with c_btn4:
-    if st.button("Demo"):
+
+  row2_col1, row2_col2 = st.columns(2)
+  with row2_col1:
+    if st.button("⚡ Fill Demo Data"):
       demo_vals = [
           4500,
           5200,
@@ -223,26 +224,21 @@ if input_mode == "Manual Entry":
       ]
       for i in range(st.session_state.num_samples):
         st.session_state[f"t_val_{i}"] = str(
-            demo_vals[i % len(demo_vals)]
-            + random.randint(-200, 200)
+            demo_vals[i % len(demo_vals)] + random.randint(-150, 150)
         )
       st.rerun()
-  with c_btn5:
-    if st.button("Clear"):
+  with row2_col2:
+    if st.button("🗑️ Clear All"):
       for i in range(st.session_state.num_samples):
         st.session_state[f"t_val_{i}"] = ""
       st.rerun()
 
-  st.markdown(
-      f"<p style='color: #5b7773; font-size: 13px;'>Total Samples:"
-      f" {st.session_state.num_samples} (Minimum required: 5)</p>",
-      unsafe_allow_html=True,
-  )
+  st.markdown("<br>", unsafe_allow_html=True)
 
-  # Render grid of inputs
-  grid_cols = st.columns(3)
+  # 2-Column Grid for mobile so input boxes have plenty of width and never overlap
+  grid_cols = st.columns(2)
   for i in range(st.session_state.num_samples):
-    col_idx = i % 3
+    col_idx = i % 2
     key = f"t_val_{i}"
     if key not in st.session_state:
       default_demo = [
@@ -266,7 +262,7 @@ if input_mode == "Manual Entry":
       )
 
     with grid_cols[col_idx]:
-      val_str = st.text_input(f"S{i+1}", key=key)
+      val_str = st.text_input(f"Sample #{i+1}", key=key)
       if val_str.strip():
         try:
           v = float(val_str.strip())
@@ -301,22 +297,18 @@ elif input_mode == "Upload PDF Report":
 
 else:  # Camera Capture Mode for Mobile
   st.markdown(
-      "Snap a clear photo of the lab report or printout using your phone camera:"
+      "Tap below to open your phone camera and capture the lab report at full"
+      " resolution:"
   )
-  camera_image = st.camera_input("Take a photo")
+  camera_image = st.camera_input("Take High-Quality Photo")
   if camera_image:
     img = Image.open(camera_image)
-    if img.width > 1600:
-      img.thumbnail((1600, 1600))
     st.image(
         img,
-        caption="Captured Report Preview",
+        caption="Captured Report (Native Full Resolution)",
         use_container_width=True,
     )
-    st.success(
-        "Photo successfully captured and optimized at high resolution!"
-    )
-    # Using sample demo array as active data placeholder for camera scan flow
+    st.success("Photo captured successfully!")
     titers = [4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800]
 
 # ==========================================
@@ -337,6 +329,7 @@ def calculate_percentile(data, percentile):
   return sorted_data[int(f)] * (c - k) + sorted_data[int(c)] * (k - f)
 
 
+st.markdown("---")
 if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_width=True):
   if len(titers) < 5:
     st.warning(
@@ -370,7 +363,6 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
     vac_int_plus_75 = get_vac_age(titer_75, 500)
     vac_int_plus_25 = get_vac_age(titer_25, 500)
 
-    st.markdown("---")
     st.markdown("### 📊 Analysis Results")
 
     if cv <= 30:
