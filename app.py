@@ -126,23 +126,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Sidebar for Gemini AI API Key config
-with st.sidebar:
-  st.markdown("### ⚙️ AI Configuration")
-  # Pull from Streamlit secrets if available, else let user input it
-  default_key = (
-      st.secrets["GEMINI_API_KEY"]
-      if "GEMINI_API_KEY" in st.secrets
-      else ""
-  )
-  api_key_input = st.text_input(
-      "Google Gemini API Key", value=default_key, type="password"
-  )
-  st.markdown(
-      "<small>Get a free API key from Google AI Studio to unlock precise AI"
-      " report scanning.</small>",
-      unsafe_allow_html=True,
-  )
+# Automatically load API key from Streamlit Cloud Secrets
+GEMINI_API_KEY = (
+    st.secrets["GEMINI_API_KEY"] if "GEMINI_API_KEY" in st.secrets else ""
+)
 
 # ==========================================
 # FLOCK & PARAMETERS INPUT
@@ -249,7 +236,6 @@ if input_mode == "Manual Entry":
 
   st.markdown("<br>", unsafe_allow_html=True)
 
-  # Sequential Row-by-Row Grid (1, 2, 3...)
   for i in range(0, st.session_state.num_samples, 2):
     row_cols = st.columns(2)
 
@@ -309,8 +295,9 @@ elif input_mode == "Upload PDF Report":
 else:  # AI Camera Extraction Mode
   st.markdown(
       "📱 **AI Vision Report Scanner:** Take or upload a photo of your ELISA"
-      " laboratory report. The Gemini AI agent will read every row in the"
-      " table from top to bottom and extract all sample titers accurately."
+      " laboratory report. The embedded Gemini AI agent will read every row in"
+      " the table from top to bottom and extract all 18 sample titers"
+      " automatically."
   )
 
   ai_photo = st.file_uploader(
@@ -329,15 +316,14 @@ else:  # AI Camera Extraction Mode
         type="primary",
         use_container_width=True,
     ):
-      if not api_key_input:
+      if not GEMINI_API_KEY:
         st.error(
-            "Please enter your Google Gemini API Key in the sidebar to use AI"
-            " extraction."
+            "GEMINI_API_KEY is missing from Streamlit Cloud Secrets. Please add"
+            " it in your app settings."
         )
       elif not GEMINI_AVAILABLE:
         st.error(
-            "The 'google-generativeai' library is missing. Please add it to"
-            " requirements.txt."
+            "The 'google-generativeai' library is missing from requirements.txt."
         )
       else:
         with st.spinner(
@@ -345,9 +331,8 @@ else:  # AI Camera Extraction Mode
             " titers..."
         ):
           try:
-            genai.configure(api_key=api_key_input)
-            # Use Gemini Flash for lightning-fast and accurate table/vision extraction
-            model = genai.GenerativeModel("gemini-2.5-flash")
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel("gemini-3.8-flash")
 
             prompt = (
                 "Analyze this veterinary ELISA report image carefully. Look at"
@@ -362,7 +347,6 @@ else:  # AI Camera Extraction Mode
             response = model.generate_content([prompt, img])
             text_resp = response.text.strip()
 
-            # Clean up response to parse json list
             match = re.search(r"\[.*?\]", text_resp, re.DOTALL)
             if match:
               extracted_list = json.loads(match.group(0))
@@ -379,8 +363,7 @@ else:  # AI Camera Extraction Mode
                 st.rerun()
               else:
                 st.warning(
-                    "AI could not detect titers. Please try a clearer"
-                    " vertical photo."
+                    "AI could not detect titers. Please try a clearer photo."
                 )
             else:
               st.error(
@@ -389,19 +372,6 @@ else:  # AI Camera Extraction Mode
               )
           except Exception as e:
             st.error(f"AI Extraction Error: {str(e)}")
-
-# If manual inputs already have values, collect them
-if input_mode != "AI Camera Extraction":
-  for i in range(st.session_state.get("num_samples", 18)):
-    key = f"t_val_{i}"
-    if key in st.session_state and st.session_state[key].strip():
-      try:
-        v = float(st.session_state[key].strip())
-        if v >= 0 and v not in titers:
-          # Keep unique collection if populated via manual or sync
-          pass
-      except ValueError:
-        pass
 
 # Re-scan state inputs for calculation
 titers = []
@@ -522,7 +492,7 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
           f"• **75% Coverage Target:** Day {vac_int_plus_75:.1f} (Days"
           f" {day_plus_75}–{day_plus_75+1})\n\n"
           f"• **25% Coverage Target:** Day {vac_int_plus_25:.1f} (Days"
-          f" {day_25}–{day_25+1})"
+          f" {day_plus_25}–{day_plus_25+1})"
       )
 
     if REPORTLAB_AVAILABLE:
