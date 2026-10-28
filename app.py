@@ -249,22 +249,6 @@ def _extract_titers_from_text(text_content):
 
 
 def _find_table_header(table):
-  skip_ref_words = [
-      "control",
-      "mean",
-      "std",
-      "cv",
-      "plate",
-      "total",
-      "min",
-      "max",
-      "titer",
-      "cutoff",
-      "cut-off",
-      "gmt",
-      "neg",
-      "pos",
-  ]
   for r_idx, row in enumerate(table[:6]):
     if not row:
       continue
@@ -441,7 +425,6 @@ if input_mode == "Manual Entry":
 
   st.markdown("<br>", unsafe_allow_html=True)
 
-  # Sequential Row-by-Row Grid (1, 2, 3...)
   for i in range(0, st.session_state.num_samples, 2):
     row_cols = st.columns(2)
 
@@ -623,30 +606,277 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
       story = []
       styles = getSampleStyleSheet()
 
+      title_style = ParagraphStyle(
+          "DocTitle",
+          parent=styles["Heading1"],
+          fontName="Helvetica-Bold",
+          fontSize=18,
+          leading=22,
+          textColor=colors.HexColor("#0b4a47"),
+          alignment=1,
+          spaceAfter=4,
+      )
+
+      subtitle_style = ParagraphStyle(
+          "DocSubTitle",
+          parent=styles["Normal"],
+          fontName="Helvetica-Oblique",
+          fontSize=10,
+          leading=12,
+          textColor=colors.HexColor("#555555"),
+          alignment=1,
+          spaceAfter=15,
+      )
+
+      section_heading = ParagraphStyle(
+          "SectionHeading",
+          parent=styles["Heading2"],
+          fontName="Helvetica-Bold",
+          fontSize=12,
+          leading=14,
+          textColor=colors.HexColor("#0b4a47"),
+          spaceBefore=10,
+          spaceAfter=6,
+      )
+
+      body_style = ParagraphStyle(
+          "BodyTextCustom",
+          parent=styles["Normal"],
+          fontName="Helvetica",
+          fontSize=9.5,
+          leading=13,
+          textColor=colors.HexColor("#222222"),
+      )
+
+      footer_credit_style = ParagraphStyle(
+          "FooterCredit",
+          parent=styles["Normal"],
+          fontName="Helvetica-BoldOblique",
+          fontSize=9,
+          leading=12,
+          textColor=colors.HexColor("#0b4a47"),
+          alignment=1,
+      )
+
       story.append(
-          Paragraph(
-              "<b>IBD (Gumboro) Vaccination Date Report</b>",
-              styles["Heading1"],
-          )
+          Paragraph("IBD (Gumboro) Vaccination Date Report", title_style)
       )
       story.append(
           Paragraph(
-              f"Flock Type: {flock_type} | Sampling Age: {sampling_age} Days",
-              styles["Normal"],
+              "Calculated using Deventer Formula (GD Deventer)", subtitle_style
           )
       )
+      story.append(
+          HRFlowable(
+              width="100%",
+              thickness=1.5,
+              color=colors.HexColor("#0b4a47"),
+              spaceAfter=12,
+          )
+      )
+
+      date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+      meta_data = [
+          [
+              Paragraph(f"<b>Report Date:</b> {date_str}", body_style),
+              Paragraph(
+                  f"<b>Flock Type:</b> {flock_type} (t½ = {t_half} days)",
+                  body_style,
+              ),
+          ],
+          [
+              Paragraph(
+                  f"<b>Sampling Age:</b> {sampling_age} Days", body_style
+              ),
+              Paragraph(
+                  f"<b>Yolk Correction:</b> +{correction} Days", body_style
+              ),
+          ],
+      ]
+      meta_table = Table(meta_data, colWidths=[260, 260])
+      meta_table.setStyle(
+          TableStyle([
+              ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8f9fa")),
+              ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
+              ("PADDING", (0, 0), (-1, -1), 6),
+          ])
+      )
+      story.append(meta_table)
       story.append(Spacer(1, 10))
+
+      story.append(Paragraph("1. Statistical Analysis Summary", section_heading))
+      stats_table_data = [
+          ["Metric", "Value", "Metric", "Value"],
+          [
+              "Total Samples (N)",
+              f"{n}",
+              "Mean Titer",
+              f"{mean_titer:,.1f}",
+          ],
+          [
+              "Minimum Titer",
+              f"{min_titer:,.1f}",
+              "Maximum Titer",
+              f"{max_titer:,.1f}",
+          ],
+          [
+              "25th Percentile Titer",
+              f"{titer_25:,.1f}",
+              "75th Percentile Titer",
+              f"{titer_75:,.1f}",
+          ],
+          ["Coefficient of Var (CV%)", f"{cv:.1f}%", "-", "-"],
+      ]
+      stats_pdf_table = Table(stats_table_data, colWidths=[150, 110, 150, 110])
+      stats_pdf_table.setStyle(
+          TableStyle([
+              ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0b4a47")),
+              ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+              ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+              ("FONTSIZE", (0, 0), (-1, -1), 9),
+              ("ALIGN", (1, 0), (1, -1), "CENTER"),
+              ("ALIGN", (3, 0), (3, -1), "CENTER"),
+              ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+              (
+                  "ROWBACKGROUNDS",
+                  (0, 1),
+                  (-1, -1),
+                  [colors.white, colors.HexColor("#f2f5f8")],
+              ),
+              ("PADDING", (0, 0), (-1, -1), 5),
+          ])
+      )
+      story.append(stats_pdf_table)
+
+      uniformity_text = "<b>Flock Uniformity Status:</b> " + (
+          "<font color='#155724'>Good (CV ≤ 30%). Single vaccination is"
+          " recommended.</font>"
+          if cv <= 30
+          else "<font color='#856404'>High Variation (CV > 30%). Consider two"
+          " vaccinations (25% and 75% targets).</font>"
+      )
+      story.append(Spacer(1, 4))
+      story.append(Paragraph(uniformity_text, body_style))
+      story.append(Spacer(1, 10))
+
       story.append(
           Paragraph(
-              f"<b>Mean Titer:</b> {mean_titer:,.1f} | <b>CV%:</b> {cv:.1f}%",
-              styles["Normal"],
+              "2. Deventer Formula Vaccination Predictions", section_heading
           )
       )
+      pred_rows = [[
+          "Vaccine Type",
+          "BT",
+          "75% Coverage Target",
+          "25% Coverage Target",
+      ]]
+
+      if vaccine_choice in ["Intermediate", "Both"]:
+        d_int_75 = math.floor(vac_int_75)
+        d_int_25 = math.floor(vac_int_25)
+        pred_rows.append([
+            "Intermediate Vaccine",
+            "250",
+            f"{vac_int_75:.1f} d (Day {d_int_75}–{d_int_75+1})",
+            f"{vac_int_25:.1f} d (Day {d_int_25}–{d_int_25+1})",
+        ])
+
+      if vaccine_choice in ["Intermediate Plus", "Both"]:
+        d_plus_75 = math.floor(vac_int_plus_75)
+        d_plus_25 = math.floor(vac_int_plus_25)
+        pred_rows.append([
+            "Intermediate Plus Vaccine",
+            "500",
+            f"{vac_int_plus_75:.1f} d (Day {d_plus_75}–{d_plus_75+1})",
+            f"{vac_int_plus_25:.1f} d (Day {d_plus_25}–{d_plus_25+1})",
+        ])
+
+      pred_pdf_table = Table(pred_rows, colWidths=[140, 50, 165, 165])
+      pred_pdf_table.setStyle(
+          TableStyle([
+              ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f766e")),
+              ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+              ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
+              ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+              ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+              ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
+              (
+                  "ROWBACKGROUNDS",
+                  (0, 1),
+                  (-1, -1),
+                  [colors.HexColor("#e6f6f3"), colors.HexColor("#fff4dc")],
+              ),
+              ("PADDING", (0, 0), (-1, -1), 6),
+          ])
+      )
+      story.append(pred_pdf_table)
+      story.append(Spacer(1, 12))
+
+      story.append(
+          Paragraph(
+              f"3. Submitted Sample Titers Data ({n} Samples)", section_heading
+          )
+      )
+      sample_grid = [[
+          "Sample",
+          "Titer",
+          "Sample",
+          "Titer",
+          "Sample",
+          "Titer",
+      ]]
+      num_rows = math.ceil(n / 3)
+
+      for r in range(num_rows):
+        row_cells = []
+        for c in range(3):
+          idx = (r * 3) + c
+          if idx < n:
+            row_cells.extend([f"S{idx+1}", f"{titernumbers[idx]:,.0f}"])
+          else:
+            row_cells.extend(["-", "-"])
+        sample_grid.append(row_cells)
+
+      titer_pdf_table = Table(sample_grid, colWidths=[80, 93, 80, 93, 80, 94])
+      titer_pdf_table.setStyle(
+          TableStyle([
+              ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#444444")),
+              ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+              ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+              ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+              ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+              ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dddddd")),
+              (
+                  "ROWBACKGROUNDS",
+                  (0, 1),
+                  (-1, -1),
+                  [colors.white, colors.HexColor("#f9f9f9")],
+              ),
+              ("PADDING", (0, 0), (-1, -1), 4),
+          ])
+      )
+      story.append(titer_pdf_table)
+
+      story.append(Spacer(1, 18))
+      story.append(
+          HRFlowable(
+              width="100%",
+              thickness=0.5,
+              color=colors.HexColor("#cccccc"),
+              spaceAfter=8,
+          )
+      )
+      story.append(
+          Paragraph(
+              "designed by Dr. Wissam J. Mohammed", footer_credit_style
+          )
+      )
+
       doc.build(story)
       pdf_data = pdf_buffer.getvalue()
 
       st.download_button(
-          label="📥 Download PDF Report",
+          label="📥 Download Complete PDF Report",
           data=pdf_data,
           file_name="IBD_Vaccination_Report.pdf",
           mime="application/pdf",
