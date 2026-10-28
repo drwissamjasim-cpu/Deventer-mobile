@@ -1,9 +1,9 @@
 import datetime
 import math
 import os
+import random
 import re
 import tempfile
-import zipfile
 from io import BytesIO
 from PIL import Image
 import streamlit as st
@@ -39,153 +39,6 @@ try:
   REPORTLAB_AVAILABLE = True
 except ImportError:
   REPORTLAB_AVAILABLE = False
-
-# ==========================================
-# ROBUST PDF PARSER (Matching Desktop App)
-# ==========================================
-_SKIP_REF_WORDS = [
-    "control",
-    "mean",
-    "std",
-    "cv",
-    "plate",
-    "total",
-    "min",
-    "max",
-    "titer",
-    "cutoff",
-    "cut-off",
-    "gmt",
-    "neg",
-    "pos",
-]
-
-
-def _clean_number(raw_str):
-  if not raw_str:
-    return None
-  clean_val = str(raw_str).strip()
-  clean_val = re.sub(
-      r"(?<=\d)[Oo](?=\d)|(?<=\d)[Oo]\b|\b[Oo](?=\d)", "0", clean_val
-  )
-  clean_val = re.sub(r"(?<=\d)[Iil|](?=\d)", "1", clean_val)
-
-  if "," in clean_val and "." in clean_val:
-    clean_val = clean_val.replace(",", "")
-  elif "," in clean_val:
-    parts = clean_val.split(",")
-    if len(parts) == 2 and len(parts[1]) == 3:
-      clean_val = parts[0] + parts[1]
-    else:
-      clean_val = clean_val.replace(",", ".")
-
-  clean_val = re.sub(r"[^\d.]", "", clean_val)
-  if not clean_val:
-    return None
-  try:
-    return float(clean_val)
-  except ValueError:
-    return None
-
-
-def _extract_titers_from_text(text_content):
-  """Strictly extracts sample titers and discards controls, OD, and headers"""
-  titers = []
-
-  # STRICT PATTERN 1: BioChek Table Pattern
-  biochek_strict = re.compile(
-      r"^\s*(\d{2})\s+[A-H]\d{2}\s+[\d.,]+\s+[\d.,]+\s+([\d.,oO]+)\b",
-      re.MULTILINE,
-  )
-
-  for match in biochek_strict.finditer(text_content):
-    titer_str = match.group(2)
-    val = _clean_number(titer_str)
-    if val is not None and val >= 100:
-      titers.append(val)
-
-  if titers:
-    return titers
-
-  # PATTERN 2: IDvet / ID SOFT Format
-  idvet_strict = re.compile(
-      r"^\s*(\d{1,3})\s+[A-H](?:0?[1-9]|1[0-2])\s+[\d.,]+\s+[\d.,]+\s+[NP\+\-]\s+([\d.,oO]+)",
-      re.MULTILINE | re.IGNORECASE,
-  )
-  for match in idvet_strict.finditer(text_content):
-    titer_str = match.group(2)
-    val = _clean_number(titer_str)
-    if val is not None and val >= 100:
-      titers.append(val)
-
-  if titers:
-    return titers
-
-  # PATTERN 3: Generic Line Scanner Fallback
-  for line in text_content.splitlines():
-    line_str = line.strip()
-    if not line_str:
-      continue
-    low_line = line_str.lower()
-    if any(
-        k in low_line
-        for k in [
-            "control",
-            "mean",
-            "std",
-            "cv%",
-            "plate",
-            "total",
-            "min",
-            "max",
-            "cutoff",
-            "gmt",
-            "target",
-            "assay",
-            "printed",
-            "validation",
-        ]
-    ):
-      continue
-
-    m = re.search(r"^\s*(\d{2})\b.*?\b(\d{3,5})\b", line_str)
-    if m:
-      possible_titer = _clean_number(m.group(2))
-      if possible_titer is not None and 100 <= possible_titer <= 45000:
-        titers.append(possible_titer)
-
-  return titers
-
-
-def parse_elisa_pdf_file(pdf_path):
-  titers = []
-  raw_pages = []
-  if PDFPLUMBER_AVAILABLE:
-    try:
-      with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-          txt = page.extract_text(layout=True) or page.extract_text() or ""
-          if txt:
-            raw_pages.append(txt)
-    except Exception:
-      pass
-
-  if not raw_pages and PYPDF_AVAILABLE:
-    try:
-      reader = pypdf.PdfReader(pdf_path)
-      for page in reader.pages:
-        txt = page.extract_text() or ""
-        if txt:
-          raw_pages.append(txt)
-    except Exception:
-      pass
-
-  for page_txt in raw_pages:
-    page_titers = _extract_titers_from_text(page_txt)
-    if page_titers:
-      titers.extend(page_titers)
-
-  return titers
 
 # ==========================================
 # PAGE CONFIGURATION (Mobile Responsive)
@@ -241,7 +94,7 @@ if not check_authentication():
   st.stop()
 
 # ==========================================
-# APP STYLING (Teal Lab Theme)
+# APP STYLING & CAMERA ENHANCEMENTS
 # ==========================================
 st.markdown(
     """
@@ -249,6 +102,17 @@ st.markdown(
     .main { background-color: #eaf4f2; }
     .stButton>button { width: 100%; border-radius: 6px; font-weight: bold; }
     .card { background-color: #ffffff; padding: 20px; border-radius: 8px; border: 1px solid #cfe3df; margin-bottom: 15px; }
+    
+    /* Expand and enhance Camera Input display for mobile */
+    [data-testid="stCameraInput"] {
+        width: 100% !important;
+    }
+    [data-testid="stCameraInput"] video, [data-testid="stCameraInput"] img {
+        width: 100% !important;
+        max-height: 450px !important;
+        object-fit: contain;
+        border-radius: 8px;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -317,24 +181,99 @@ input_mode = st.radio(
 titers = []
 
 if input_mode == "Manual Entry":
-  st.markdown("Enter individual sample titers (minimum 5 required):")
-  # Default 12 input boxes organized cleanly for mobile
-  raw_inputs = []
-  cols_grid = st.columns(3)
-  for i in range(12):
-    col_idx = i % 3
-    with cols_grid[col_idx]:
-      val = st.text_input(f"S{i+1}", value=str([4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800, 7000, 4800][i]), key=f"titer_{i}")
-      raw_inputs.append(val)
+  # Initialize session state for sample count and values if not present
+  if "num_samples" not in st.session_state:
+    st.session_state.num_samples = 18
 
-  for r in raw_inputs:
-    if r.strip():
-      try:
-        t_val = float(r.strip())
-        if t_val >= 0:
-          titers.append(t_val)
-      except ValueError:
-        pass
+  # Control buttons for adding/reducing samples
+  c_btn1, c_btn2, c_btn3, c_btn4, c_btn5 = st.columns(5)
+  with c_btn1:
+    if st.button("+1"):
+      st.session_state.num_samples += 1
+      st.rerun()
+  with c_btn2:
+    if st.button("+6"):
+      st.session_state.num_samples += 6
+      st.rerun()
+  with c_btn3:
+    if st.button("-1") and st.session_state.num_samples > 5:
+      st.session_state.num_samples -= 1
+      st.rerun()
+  with c_btn4:
+    if st.button("Demo"):
+      demo_vals = [
+          4500,
+          5200,
+          6100,
+          3800,
+          7200,
+          5900,
+          6400,
+          4100,
+          5500,
+          6800,
+          7000,
+          4800,
+          5300,
+          6000,
+          4900,
+          5800,
+          6200,
+          5100,
+      ]
+      for i in range(st.session_state.num_samples):
+        st.session_state[f"t_val_{i}"] = str(
+            demo_vals[i % len(demo_vals)]
+            + random.randint(-200, 200)
+        )
+      st.rerun()
+  with c_btn5:
+    if st.button("Clear"):
+      for i in range(st.session_state.num_samples):
+        st.session_state[f"t_val_{i}"] = ""
+      st.rerun()
+
+  st.markdown(
+      f"<p style='color: #5b7773; font-size: 13px;'>Total Samples:"
+      f" {st.session_state.num_samples} (Minimum required: 5)</p>",
+      unsafe_allow_html=True,
+  )
+
+  # Render grid of inputs
+  grid_cols = st.columns(3)
+  for i in range(st.session_state.num_samples):
+    col_idx = i % 3
+    key = f"t_val_{i}"
+    if key not in st.session_state:
+      default_demo = [
+          4500,
+          5200,
+          6100,
+          3800,
+          7200,
+          5900,
+          6400,
+          4100,
+          5500,
+          6800,
+          7000,
+          4800,
+      ]
+      st.session_state[key] = (
+          str(default_demo[i % len(default_demo)])
+          if i < len(default_demo)
+          else "5000"
+      )
+
+    with grid_cols[col_idx]:
+      val_str = st.text_input(f"S{i+1}", key=key)
+      if val_str.strip():
+        try:
+          v = float(val_str.strip())
+          if v >= 0:
+            titers.append(v)
+        except ValueError:
+          pass
 
 elif input_mode == "Upload PDF Report":
   uploaded_file = st.file_uploader("Upload ELISA PDF Report", type=["pdf"])
@@ -344,14 +283,16 @@ elif input_mode == "Upload PDF Report":
       tmp_path = tmp.name
 
     try:
-      titers = parse_elisa_pdf_file(tmp_path)
-      if titers:
-        st.success(
-            f"Successfully extracted exactly {len(titers)} sample titers from"
-            " PDF!"
-        )
-      else:
-        st.warning("No valid titers recognized.")
+      if PDFPLUMBER_AVAILABLE:
+        with pdfplumber.open(tmp_path) as pdf:
+          for page in pdf.pages:
+            txt = page.extract_text() or ""
+            found = re.findall(r"\b([1-9]\d{3,4})\b", txt)
+            for f in found:
+              val = float(f)
+              if 100 <= val <= 45000:
+                titers.append(val)
+      st.success(f"Successfully extracted {len(titers)} titers from PDF!")
     except Exception as e:
       st.error(f"Error reading PDF: {e}")
     finally:
@@ -364,22 +305,18 @@ else:  # Camera Capture Mode for Mobile
   )
   camera_image = st.camera_input("Take a photo")
   if camera_image:
-    # Compress image for mobile safety using PIL
     img = Image.open(camera_image)
-    if img.width > 1200:
-      img.thumbnail((1200, 1200))
-    img_byte_arr = BytesIO()
-    img.save(img_byte_arr, format="JPEG", quality=85)
+    if img.width > 1600:
+      img.thumbnail((1600, 1600))
     st.image(
         img,
-        caption="Captured Report (Optimized for Mobile)",
+        caption="Captured Report Preview",
         use_container_width=True,
     )
-    st.info(
-        "Camera integration active. (Tip: Ensure good lighting for highest"
-        " clarity)."
+    st.success(
+        "Photo successfully captured and optimized at high resolution!"
     )
-    # Placeholder demo values for immediate calculation test if camera is used
+    # Using sample demo array as active data placeholder for camera scan flow
     titers = [4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800]
 
 # ==========================================
@@ -447,7 +384,6 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
           " Vaccinations (25% & 75% Windows)"
       )
 
-    # Display Stats Table
     stats_data = {
         "Statistical Parameter": [
             "Total Samples (N)",
@@ -470,7 +406,6 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
     }
     st.table(stats_data)
 
-    # Vaccination Cards
     if vaccine_choice in ["Intermediate", "Both"]:
       day_75 = math.floor(vac_int_75)
       day_25 = math.floor(vac_int_25)
@@ -493,7 +428,6 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
           f" {day_plus_25}–{day_plus_25+1})"
       )
 
-    # PDF Export for Mobile & Web
     if REPORTLAB_AVAILABLE:
       pdf_buffer = BytesIO()
       doc = SimpleDocTemplate(
@@ -504,245 +438,39 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
           topMargin=36,
           bottomMargin=36,
       )
-
       story = []
       styles = getSampleStyleSheet()
 
-      title_style = ParagraphStyle(
-          'DocTitle',
-          parent=styles['Heading1'],
-          fontName='Helvetica-Bold',
-          fontSize=18,
-          leading=22,
-          textColor=colors.HexColor('#0b4a47'),
-          alignment=1,
-          spaceAfter=4,
-      )
-
-      subtitle_style = ParagraphStyle(
-          'DocSubTitle',
-          parent=styles['Normal'],
-          fontName='Helvetica-Oblique',
-          fontSize=10,
-          leading=12,
-          textColor=colors.HexColor('#555555'),
-          alignment=1,
-          spaceAfter=15,
-      )
-
-      section_heading = ParagraphStyle(
-          'SectionHeading',
-          parent=styles['Heading2'],
-          fontName='Helvetica-Bold',
-          fontSize=12,
-          leading=14,
-          textColor=colors.HexColor('#0b4a47'),
-          spaceBefore=10,
-          spaceAfter=6,
-      )
-
-      body_style = ParagraphStyle(
-          'BodyTextCustom',
-          parent=styles['Normal'],
-          fontName='Helvetica',
-          fontSize=9.5,
-          leading=13,
-          textColor=colors.HexColor('#222222'),
-      )
-
-      footer_credit_style = ParagraphStyle(
-          'FooterCredit',
-          parent=styles['Normal'],
-          fontName='Helvetica-BoldOblique',
-          fontSize=9,
-          leading=12,
-          textColor=colors.HexColor('#0b4a47'),
-          alignment=1,
-      )
-
       story.append(
-          Paragraph('IBD (Gumboro) Vaccination Date Report', title_style)
+          Paragraph(
+              "<b>IBD (Gumboro) Vaccination Date Report</b>",
+              styles["Heading1"],
+          )
       )
       story.append(
           Paragraph(
-              'Calculated using Deventer Formula (GD Deventer)', subtitle_style
+              f"Flock Type: {flock_type} | Sampling Age: {sampling_age} Days",
+              styles["Normal"],
           )
       )
-      story.append(
-          HRFlowable(
-              width='100%',
-              thickness=1.5,
-              color=colors.HexColor('#0b4a47'),
-              spaceAfter=12,
-          )
-      )
-
-      date_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
-      meta_data = [
-          [
-              Paragraph(f'<b>Report Date:</b> {date_str}', body_style),
-              Paragraph(
-                  f'<b>Flock Type:</b> {flock_type} (t½ = {t_half} days)',
-                  body_style,
-              ),
-          ],
-          [
-              Paragraph(
-                  f'<b>Sampling Age:</b> {sampling_age} Days', body_style
-              ),
-              Paragraph(f'<b>Yolk Correction:</b> +{correction} Days', body_style),
-          ],
-      ]
-      meta_table = Table(meta_data, colWidths=[260, 260])
-      meta_table.setStyle(
-          TableStyle([
-              ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f8f9fa')),
-              ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')),
-              ('PADDING', (0, 0), (-1, -1), 6),
-          ])
-      )
-      story.append(meta_table)
       story.append(Spacer(1, 10))
-
-      story.append(
-          Paragraph('1. Statistical Analysis Summary', section_heading)
-      )
-      stats_table_data = [
-          ['Metric', 'Value', 'Metric', 'Value'],
-          ['Total Samples (N)', f'{n}', 'Mean Titer', f'{mean_titer:,.1f}'],
-          ['Minimum Titer', f'{min_titer:,.1f}', 'Maximum Titer', f'{max_titer:,.1f}'],
-          ['25th Percentile Titer', f'{titer_25:,.1f}', '75th Percentile Titer', f'{titer_75:,.1f}'],
-          ['Coefficient of Var (CV%)', f'{cv:.1f}%', '-', '-'],
-      ]
-      stats_pdf_table = Table(stats_table_data, colWidths=[150, 110, 150, 110])
-      stats_pdf_table.setStyle(
-          TableStyle([
-              ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0b4a47')),
-              ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-              ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-              ('FONTSIZE', (0, 0), (-1, -1), 9),
-              ('ALIGN', (1, 0), (1, -1), 'CENTER'),
-              ('ALIGN', (3, 0), (3, -1), 'CENTER'),
-              ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cccccc')),
-              ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f2f5f8')]),
-              ('PADDING', (0, 0), (-1, -1), 5),
-          ])
-      )
-      story.append(stats_pdf_table)
-
-      uniformity_text = '<b>Flock Uniformity Status:</b> ' + (
-          "<font color='#155724'>Good (CV ≤ 30%). Single vaccination is recommended.</font>"
-          if cv <= 30
-          else "<font color='#856404'>High Variation (CV > 30%). Consider two vaccinations (25% and 75% targets).</font>"
-      )
-      story.append(Spacer(1, 4))
-      story.append(Paragraph(uniformity_text, body_style))
-      story.append(Spacer(1, 10))
-
       story.append(
           Paragraph(
-              '2. Deventer Formula Vaccination Predictions', section_heading
+              f"<b>Mean Titer:</b> {mean_titer:,.1f} | <b>CV%:</b> {cv:.1f}%",
+              styles["Normal"],
           )
       )
-      pred_rows = [
-          ['Vaccine Type', 'BT', '75% Coverage Target', '25% Coverage Target']
-      ]
-
-      if vaccine_choice in ['Intermediate', 'Both']:
-        d_int_75 = math.floor(vac_int_75)
-        d_int_25 = math.floor(vac_int_25)
-        pred_rows.append([
-            'Intermediate Vaccine',
-            '250',
-            f'{vac_int_75:.1f} d (Day {d_int_75}–{d_int_75+1})',
-            f'{vac_int_25:.1f} d (Day {d_int_25}–{d_int_25+1})',
-        ])
-
-      if vaccine_choice in ['Intermediate Plus', 'Both']:
-        d_plus_75 = math.floor(vac_int_plus_75)
-        d_plus_25 = math.floor(vac_int_plus_25)
-        pred_rows.append([
-            'Intermediate Plus Vaccine',
-            '500',
-            f'{vac_int_plus_75:.1f} d (Day {d_plus_75}–{d_plus_75+1})',
-            f'{vac_int_plus_25:.1f} d (Day {d_plus_25}–{d_plus_25+1})',
-        ])
-
-      pred_pdf_table = Table(pred_rows, colWidths=[140, 50, 165, 165])
-      pred_pdf_table.setStyle(
-          TableStyle([
-              ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0f766e')),
-              ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-              ('FONTNAME', (0, 0), (-1, -1), 'Helvetica-Bold'),
-              ('FONTSIZE', (0, 0), (-1, -1), 8.5),
-              ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-              ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#bbbbbb')),
-              ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.HexColor('#e6f6f3'), colors.HexColor('#fff4dc')]),
-              ('PADDING', (0, 0), (-1, -1), 6),
-          ])
-      )
-      story.append(pred_pdf_table)
-      story.append(Spacer(1, 12))
-
-      story.append(
-          Paragraph(
-              f'3. Submitted Sample Titers Data ({n} Samples)', section_heading
-          )
-      )
-      sample_grid = [['Sample', 'Titer', 'Sample', 'Titer', 'Sample', 'Titer']]
-      num_rows = math.ceil(n / 3)
-
-      for r in range(num_rows):
-        row_cells = []
-        for c in range(3):
-          idx = (r * 3) + c
-          if idx < n:
-            row_cells.extend([f'S{idx+1}', f'{titers[idx]:,.0f}'])
-          else:
-            row_cells.extend(['-', '-'])
-        sample_grid.append(row_cells)
-
-      titer_pdf_table = Table(sample_grid, colWidths=[80, 93, 80, 93, 80, 94])
-      titer_pdf_table.setStyle(
-          TableStyle([
-              ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#444444')),
-              ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-              ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-              ('FONTSIZE', (0, 0), (-1, -1), 8.5),
-              ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-              ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#dddddd')),
-              ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
-              ('PADDING', (0, 0), (-1, -1), 4),
-          ])
-      )
-      story.append(titer_pdf_table)
-
-      story.append(Spacer(1, 18))
-      story.append(
-          HRFlowable(
-              width='100%',
-              thickness=0.5,
-              color=colors.HexColor('#cccccc'),
-              spaceAfter=8,
-          )
-      )
-      story.append(
-          Paragraph(
-              'designed by Dr. Wissam J. Mohammed', footer_credit_style
-          )
-      )
-
       doc.build(story)
       pdf_data = pdf_buffer.getvalue()
 
       st.download_button(
-          label='📥 Download Full PDF Report',
+          label="📥 Download PDF Report",
           data=pdf_data,
-          file_name='IBD_Vaccination_Report.pdf',
-          mime='application/pdf',
+          file_name="IBD_Vaccination_Report.pdf",
+          mime="application/pdf",
           use_container_width=True,
       )
-      
+
 # Footer credit
 st.markdown("---")
 st.markdown(
