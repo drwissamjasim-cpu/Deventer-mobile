@@ -94,7 +94,7 @@ if not check_authentication():
   st.stop()
 
 # ==========================================
-# APP STYLING & MOBILE RESPONSIVE FIXES
+# APP STYLING & VERTICAL PORTRAIT CAMERA CSS
 # ==========================================
 st.markdown(
     """
@@ -102,15 +102,19 @@ st.markdown(
     .main { background-color: #eaf4f2; }
     .stButton>button { width: 100%; border-radius: 6px; font-weight: bold; min-height: 42px; }
     
-    /* Make camera input full width and high quality preview on mobile */
+    /* Force Camera Input into a clean Vertical (Portrait) Box */
     [data-testid="stCameraInput"] {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
         width: 100% !important;
     }
     [data-testid="stCameraInput"] video, [data-testid="stCameraInput"] img {
         width: 100% !important;
-        max-height: 500px !important;
-        object-fit: cover;
-        border-radius: 8px;
+        max-width: 420px !important;
+        aspect-ratio: 3 / 4 !important;
+        object-fit: cover !important;
+        border-radius: 12px;
     }
     </style>
     """,
@@ -181,10 +185,9 @@ if input_mode == "Manual Entry":
     st.session_state.num_samples = 18
 
   st.markdown(
-      f"*Total Samples: {st.session_state.num_samples}* (Min required: 5)"
+      f"**Total Samples: {st.session_state.num_samples}** (Min required: 5)"
   )
 
-  # Clean 5-button toolbar split into two rows on mobile for perfect spacing
   row1_col1, row1_col2, row1_col3 = st.columns(3)
   with row1_col1:
     if st.button("➕ Add 1"):
@@ -235,7 +238,6 @@ if input_mode == "Manual Entry":
 
   st.markdown("<br>", unsafe_allow_html=True)
 
-  # 2-Column Grid for mobile so input boxes have plenty of width and never overlap
   grid_cols = st.columns(2)
   for i in range(st.session_state.num_samples):
     col_idx = i % 2
@@ -295,20 +297,20 @@ elif input_mode == "Upload PDF Report":
       if os.path.exists(tmp_path):
         os.remove(tmp_path)
 
-else:  # Camera Capture Mode for Mobile
+else:  # Vertical Camera Capture Mode for Mobile
   st.markdown(
-      "Tap below to open your phone camera and capture the lab report at full"
-      " resolution:"
+      "📱 **Vertical Camera Mode:** Hold your phone vertically (portrait)"
+      " slightly back from the A4 paper so the text stays sharp and focused."
   )
-  camera_image = st.camera_input("Take High-Quality Photo")
+  camera_image = st.camera_input("Capture A4 Report")
   if camera_image:
     img = Image.open(camera_image)
     st.image(
         img,
-        caption="Captured Report (Native Full Resolution)",
+        caption="Captured Vertical Report Preview",
         use_container_width=True,
     )
-    st.success("Photo captured successfully!")
+    st.success("Photo captured successfully in portrait mode!")
     titers = [4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800]
 
 # ==========================================
@@ -367,12 +369,12 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
 
     if cv <= 30:
       st.success(
-          f"*Flock Uniformity Good (CV = {cv:.1f}%)* — Single Vaccination"
+          f"**Flock Uniformity Good (CV = {cv:.1f}%)** — Single Vaccination"
           " Recommended"
       )
     else:
       st.warning(
-          f"*High Flock Variation (CV = {cv:.1f}%)* — Consider Two"
+          f"**High Flock Variation (CV = {cv:.1f}%)** — Consider Two"
           " Vaccinations (25% & 75% Windows)"
       )
 
@@ -402,10 +404,10 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
       day_75 = math.floor(vac_int_75)
       day_25 = math.floor(vac_int_25)
       st.info(
-          "*Intermediate Vaccine (BT = 250)*\n\n"
-          f"• *75% Coverage Target:* Day {vac_int_75:.1f} (Days"
+          "**Intermediate Vaccine (BT = 250)**\n\n"
+          f"• **75% Coverage Target:** Day {vac_int_75:.1f} (Days"
           f" {day_75}–{day_75+1})\n\n"
-          f"• *25% Coverage Target:* Day {vac_int_25:.1f} (Days"
+          f"• **25% Coverage Target:** Day {vac_int_25:.1f} (Days"
           f" {day_25}–{day_25+1})"
       )
 
@@ -413,10 +415,10 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
       day_plus_75 = math.floor(vac_int_plus_75)
       day_plus_25 = math.floor(vac_int_plus_25)
       st.warning(
-          "*Intermediate Plus Vaccine (BT = 500)*\n\n"
-          f"• *75% Coverage Target:* Day {vac_int_plus_75:.1f} (Days"
+          "**Intermediate Plus Vaccine (BT = 500)**\n\n"
+          f"• **75% Coverage Target:** Day {vac_int_plus_75:.1f} (Days"
           f" {day_plus_75}–{day_plus_75+1})\n\n"
-          f"• *25% Coverage Target:* Day {vac_int_plus_25:.1f} (Days"
+          f"• **25% Coverage Target:** Day {vac_int_plus_25:.1f} (Days"
           f" {day_plus_25}–{day_plus_25+1})"
       )
 
