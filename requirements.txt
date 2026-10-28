@@ -3,3 +3,4 @@ pillow
 pdfplumber
 pypdf
 reportlab
+google-generativeai
