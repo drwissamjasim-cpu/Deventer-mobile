@@ -1,4 +1,5 @@
 import datetime
+import json
 import math
 import os
 import random
@@ -7,6 +8,14 @@ import tempfile
 from io import BytesIO
 from PIL import Image
 import streamlit as st
+
+# Google GenAI SDK Import
+try:
+  import google.generativeai as genai
+
+  GEMINI_AVAILABLE = True
+except ImportError:
+  GEMINI_AVAILABLE = False
 
 # Check for optional libraries
 try:
@@ -117,6 +126,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Sidebar for Gemini AI API Key config
+with st.sidebar:
+  st.markdown("### ⚙️ AI Configuration")
+  # Pull from Streamlit secrets if available, else let user input it
+  default_key = (
+      st.secrets["GEMINI_API_KEY"]
+      if "GEMINI_API_KEY" in st.secrets
+      else ""
+  )
+  api_key_input = st.text_input(
+      "Google Gemini API Key", value=default_key, type="password"
+  )
+  st.markdown(
+      "<small>Get a free API key from Google AI Studio to unlock precise AI"
+      " report scanning.</small>",
+      unsafe_allow_html=True,
+  )
+
 # ==========================================
 # FLOCK & PARAMETERS INPUT
 # ==========================================
@@ -134,7 +161,7 @@ flock_type = st.selectbox(
 )
 
 sampling_age = st.number_input(
-    "Sampling Age (Days)", min_value=1, max_value=60, value=1
+    "Sampling Age (Days)", min_value=1, max_value=60, value=5
 )
 
 t_half = {"Broiler": 3.0, "Breeder": 4.5, "Layer": 5.5}[flock_type]
@@ -153,13 +180,13 @@ vaccine_choice = st.selectbox(
 )
 
 # ==========================================
-# DATA INPUT MODES (Manual / PDF / Native Camera)
+# DATA INPUT MODES (Manual / PDF / AI Camera)
 # ==========================================
 st.markdown("---")
 st.markdown("### 🧫 Titer Data Input")
 input_mode = st.radio(
     "Choose Input Method",
-    ["Manual Entry", "Upload PDF Report", "Capture with Native Camera"],
+    ["Manual Entry", "Upload PDF Report", "AI Camera Extraction"],
     horizontal=True,
 )
 
@@ -173,7 +200,6 @@ if input_mode == "Manual Entry":
       f"**Total Samples: {st.session_state.num_samples}** (Min required: 5)"
   )
 
-  # Control buttons layout
   row1_col1, row1_col2, row1_col3 = st.columns(3)
   with row1_col1:
     if st.button("➕ Add 1"):
@@ -192,29 +218,28 @@ if input_mode == "Manual Entry":
   with row2_col1:
     if st.button("⚡ Fill Demo Data"):
       demo_vals = [
-          4500,
-          5200,
-          6100,
-          3800,
-          7200,
-          5900,
-          6400,
-          4100,
-          5500,
-          6800,
-          7000,
-          4800,
-          5300,
-          6000,
-          4900,
-          5800,
-          6200,
-          5100,
+          3427,
+          1824,
+          1118,
+          2321,
+          2170,
+          2935,
+          1427,
+          1750,
+          6399,
+          2514,
+          2945,
+          1933,
+          1866,
+          4236,
+          3049,
+          3176,
+          1953,
+          2010,
       ]
-      for i in range(st.session_state.num_samples):
-        st.session_state[f"t_val_{i}"] = str(
-            demo_vals[i % len(demo_vals)] + random.randint(-150, 150)
-        )
+      st.session_state.num_samples = len(demo_vals)
+      for i, val in enumerate(demo_vals):
+        st.session_state[f"t_val_{i}"] = str(val)
       st.rerun()
   with row2_col2:
     if st.button("🗑️ Clear All"):
@@ -224,18 +249,13 @@ if input_mode == "Manual Entry":
 
   st.markdown("<br>", unsafe_allow_html=True)
 
-  # STRICT ROW-BY-ROW SEQUENTIAL GRID (1, 2, 3, 4, 5...)
+  # Sequential Row-by-Row Grid (1, 2, 3...)
   for i in range(0, st.session_state.num_samples, 2):
     row_cols = st.columns(2)
 
-    # First item in row
     key1 = f"t_val_{i}"
     if key1 not in st.session_state:
-      st.session_state[key1] = str(
-          [4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800][
-              i % 10
-          ]
-      )
+      st.session_state[key1] = ""
 
     with row_cols[0]:
       val_str1 = st.text_input(f"Sample #{i+1}", key=key1)
@@ -247,15 +267,10 @@ if input_mode == "Manual Entry":
         except ValueError:
           pass
 
-    # Second item in row (if available)
     if i + 1 < st.session_state.num_samples:
       key2 = f"t_val_{i+1}"
       if key2 not in st.session_state:
-        st.session_state[key2] = str(
-            [4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800][
-                (i + 1) % 10
-            ]
-        )
+        st.session_state[key2] = ""
 
       with row_cols[1]:
         val_str2 = st.text_input(f"Sample #{i+2}", key=key2)
@@ -291,26 +306,114 @@ elif input_mode == "Upload PDF Report":
       if os.path.exists(tmp_path):
         os.remove(tmp_path)
 
-else:  # Native Mobile Camera App Mode
+else:  # AI Camera Extraction Mode
   st.markdown(
-      "📱 **Native Camera Capture:** Tap the button below to launch your phone's"
-      " built-in camera app. This lets you use your phone's native autofocus,"
-      " telephoto/macro lenses, pinch-to-zoom, and portrait orientation"
-      " perfectly."
+      "📱 **AI Vision Report Scanner:** Take or upload a photo of your ELISA"
+      " laboratory report. The Gemini AI agent will read every row in the"
+      " table from top to bottom and extract all sample titers accurately."
   )
 
-  native_photo = st.file_uploader(
-      "📸 Take Photo with Phone Camera", type=["jpg", "jpeg", "png"]
+  ai_photo = st.file_uploader(
+      "📸 Upload Lab Report Photo", type=["jpg", "jpeg", "png"]
   )
-  if native_photo:
-    img = Image.open(native_photo)
+  if ai_photo:
+    img = Image.open(ai_photo)
     st.image(
         img,
-        caption="Captured Native Report Photo",
+        caption="Uploaded Report Preview",
         use_container_width=True,
     )
-    st.success("Photo received from native camera app successfully!")
-    titers = [4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800]
+
+    if st.button(
+        "✨ Extract All Titers with AI Agent",
+        type="primary",
+        use_container_width=True,
+    ):
+      if not api_key_input:
+        st.error(
+            "Please enter your Google Gemini API Key in the sidebar to use AI"
+            " extraction."
+        )
+      elif not GEMINI_AVAILABLE:
+        st.error(
+            "The 'google-generativeai' library is missing. Please add it to"
+            " requirements.txt."
+        )
+      else:
+        with st.spinner(
+            "🤖 AI Agent is scanning the report table and extracting all"
+            " titers..."
+        ):
+          try:
+            genai.configure(api_key=api_key_input)
+            # Use Gemini Flash for lightning-fast and accurate table/vision extraction
+            model = genai.GenerativeModel("gemini-2.5-flash")
+
+            prompt = (
+                "Analyze this veterinary ELISA report image carefully. Look at"
+                " the data table at the bottom containing Sample ID, Well, OD,"
+                " S/P Ratio, Titer, and Result. Extract EVERY SINGLE sample"
+                " titer value listed in the table sequentially from Sample 1 to"
+                " the final sample (e.g., Sample 18). Return ONLY a valid JSON"
+                " list of numbers representing the titers in order, for"
+                " example: [3427, 1824, 1118, ...]. Do not miss any rows."
+            )
+
+            response = model.generate_content([prompt, img])
+            text_resp = response.text.strip()
+
+            # Clean up response to parse json list
+            match = re.search(r"\[.*?\]", text_resp, re.DOTALL)
+            if match:
+              extracted_list = json.loads(match.group(0))
+              extracted_titers = [float(t) for t in extracted_list]
+
+              if extracted_titers:
+                st.session_state.num_samples = len(extracted_titers)
+                for idx, tval in enumerate(extracted_titers):
+                  st.session_state[f"t_val_{idx}"] = str(int(tval))
+                st.success(
+                    f"🎉 Successfully extracted {len(extracted_titers)}"
+                    " sample titers using AI Vision!"
+                )
+                st.rerun()
+              else:
+                st.warning(
+                    "AI could not detect titers. Please try a clearer"
+                    " vertical photo."
+                )
+            else:
+              st.error(
+                  "Could not parse AI response. Please try clicking the button"
+                  " again."
+              )
+          except Exception as e:
+            st.error(f"AI Extraction Error: {str(e)}")
+
+# If manual inputs already have values, collect them
+if input_mode != "AI Camera Extraction":
+  for i in range(st.session_state.get("num_samples", 18)):
+    key = f"t_val_{i}"
+    if key in st.session_state and st.session_state[key].strip():
+      try:
+        v = float(st.session_state[key].strip())
+        if v >= 0 and v not in titers:
+          # Keep unique collection if populated via manual or sync
+          pass
+      except ValueError:
+        pass
+
+# Re-scan state inputs for calculation
+titers = []
+for i in range(st.session_state.get("num_samples", 18)):
+  val_str = st.session_state.get(f"t_val_{i}", "")
+  if val_str.strip():
+    try:
+      v = float(val_str.strip())
+      if v >= 0:
+        titers.append(v)
+    except ValueError:
+      pass
 
 # ==========================================
 # CALCULATION & RESULTS
@@ -334,7 +437,8 @@ st.markdown("---")
 if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_width=True):
   if len(titers) < 5:
     st.warning(
-        "Please provide at least 5 valid sample titers to perform calculations."
+        f"You currently have {len(titers)} valid titers. Please provide at"
+        " least 5 samples to perform calculations."
     )
   else:
     n = len(titers)
@@ -418,7 +522,7 @@ if st.button("🧪 Calculate Vaccination Dates", type="primary", use_container_w
           f"• **75% Coverage Target:** Day {vac_int_plus_75:.1f} (Days"
           f" {day_plus_75}–{day_plus_75+1})\n\n"
           f"• **25% Coverage Target:** Day {vac_int_plus_25:.1f} (Days"
-          f" {day_plus_25}–{day_plus_25+1})"
+          f" {day_25}–{day_25+1})"
       )
 
     if REPORTLAB_AVAILABLE:
