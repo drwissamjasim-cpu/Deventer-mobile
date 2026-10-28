@@ -152,6 +152,227 @@ vaccine_choice = st.selectbox(
     ),
 )
 
+
+# ==========================================
+# DESKTOP-SYNCHRONIZED PDF PARSING ENGINE
+# ==========================================
+def _clean_number(raw_str):
+  if not raw_str:
+    return None
+  clean_val = str(raw_str).strip()
+  clean_val = re.sub(
+      r"(?<=\d)[Oo](?=\d)|(?<=\d)[Oo]\b|\b[Oo](?=\d)", "0", clean_val
+  )
+  clean_val = re.sub(r"(?<=\d)[Iil|](?=\d)", "1", clean_val)
+  if "," in clean_val and "." in clean_val:
+    clean_val = clean_val.replace(",", "")
+  elif "," in clean_val:
+    parts = clean_val.split(",")
+    if len(parts) == 2 and len(parts[1]) == 3:
+      clean_val = parts[0] + parts[1]
+    else:
+      clean_val = clean_val.replace(",", ".")
+  clean_val = re.sub(r"[^\d.]", "", clean_val)
+  if not clean_val:
+    return None
+  try:
+    return float(clean_val)
+  except ValueError:
+    return None
+
+
+def _extract_titers_from_text(text_content):
+  titers = []
+  biochek_strict = re.compile(
+      r"^\s*(\d{2})\s+[A-H]\d{2}\s+[\d.,]+\s+[\d.,]+\s+([\d.,oO]+)\b",
+      re.MULTILINE,
+  )
+  for match in biochek_strict.finditer(text_content):
+    val = _clean_number(match.group(2))
+    if val is not None and val >= 100:
+      titers.append(val)
+  if titers:
+    return titers
+
+  idvet_strict = re.compile(
+      r"^\s*(\d{1,3})\s+[A-H](?:0?[1-9]|1[0-2])\s+[\d.,]+\s+[\d.,]+\s+[NP\+\-]"\
+      r"\s+([\d.,oO]+)",
+      re.MULTILINE | re.IGNORECASE,
+  )
+  for match in idvet_strict.finditer(text_content):
+    val = _clean_number(match.group(2))
+    if val is not None and val >= 100:
+      titers.append(val)
+  if titers:
+    return titers
+
+  result_fmt = re.compile(
+      r"\b(\d{1,3})\s+[A-H]\d{1,2}\s+\d+\.\d+\s+\d+\.\d+\s+[NSP]\s+([\d,]+)",
+      re.IGNORECASE,
+  )
+  for match in result_fmt.finditer(text_content):
+    val = _clean_number(match.group(2))
+    if val is not None and val >= 0:
+      titers.append(val)
+  if titers:
+    return titers
+
+  skip_words = [
+      "control",
+      "mean",
+      "std",
+      "cv%",
+      "plate",
+      "total",
+      "min",
+      "max",
+      "cutoff",
+      "gmt",
+      "target",
+      "assay",
+      "printed",
+      "validation",
+  ]
+  for line in text_content.splitlines():
+    line_str = line.strip()
+    if not line_str:
+      continue
+    low_line = line_str.lower()
+    if any(k in low_line for k in skip_words):
+      continue
+    m = re.search(r"^\s*(\d{2})\b.*?\b(\d{3,5})\b", line_str)
+    if m:
+      possible_titer = _clean_number(m.group(2))
+      if possible_titer is not None and 100 <= possible_titer <= 45000:
+        titers.append(possible_titer)
+  return titers
+
+
+def _find_table_header(table):
+  skip_ref_words = [
+      "control",
+      "mean",
+      "std",
+      "cv",
+      "plate",
+      "total",
+      "min",
+      "max",
+      "titer",
+      "cutoff",
+      "cut-off",
+      "gmt",
+      "neg",
+      "pos",
+  ]
+  for r_idx, row in enumerate(table[:6]):
+    if not row:
+      continue
+    cells = [str(c).strip().lower() if c else "" for c in row]
+    titer_idx = ref_idx = -1
+    for c_idx, cell in enumerate(cells):
+      if (
+          "titer" in cell or "titre" in cell or "título" in cell
+      ) and "group" not in cell:
+        titer_idx = c_idx
+      elif ref_idx == -1 and any(
+          k in cell for k in ["sample", "ref", "n°", "no.", "id"]
+      ):
+        ref_idx = c_idx
+    if titer_idx != -1 and ref_idx != -1:
+      return r_idx, ref_idx, titer_idx, len(row)
+  return None
+
+
+def _rows_to_titers(rows, ref_idx, titer_idx):
+  skip_ref_words = [
+      "control",
+      "mean",
+      "std",
+      "cv",
+      "plate",
+      "total",
+      "min",
+      "max",
+      "titer",
+      "cutoff",
+      "cut-off",
+      "gmt",
+      "neg",
+      "pos",
+  ]
+  out = []
+  for row in rows:
+    if not row or len(row) <= titer_idx:
+      continue
+    ref_val = (
+        str(row[ref_idx]).strip() if (len(row) > ref_idx and row[ref_idx]) else ""
+    )
+    low_ref = ref_val.lower()
+    if any(k in low_ref for k in skip_ref_words):
+      continue
+    if not re.match(r"^[A-Za-z]{0,3}\d+", ref_val):
+      continue
+    raw_titer = str(row[titer_idx]).strip() if row[titer_idx] else ""
+    if not raw_titer:
+      continue
+    val = _clean_number(raw_titer)
+    if val is not None and val >= 0:
+      out.append(val)
+  return out
+
+
+def parse_elisa_pdf(pdf_path):
+  titers = []
+  if PDFPLUMBER_AVAILABLE:
+    try:
+      with pdfplumber.open(pdf_path) as pdf:
+        layout = None
+        for page in pdf.pages:
+          for table in (page.extract_tables() or []):
+            if not table:
+              continue
+            hdr = _find_table_header(table)
+            if hdr:
+              h_idx, ref_idx, titer_idx, n_cols = hdr
+              layout = (ref_idx, titer_idx, n_cols)
+              titers.extend(_rows_to_titers(table[h_idx + 1 :], ref_idx, titer_idx))
+            elif layout and len(table[0]) == layout[2]:
+              titers.extend(_rows_to_titers(table, layout[0], layout[1]))
+    except Exception:
+      pass
+    if titers:
+      return titers
+
+  raw_pages = []
+  if PDFPLUMBER_AVAILABLE:
+    try:
+      with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages:
+          txt = page.extract_text(layout=True) or page.extract_text() or ""
+          if txt:
+            raw_pages.append(txt)
+    except Exception:
+      pass
+
+  if not raw_pages and PYPDF_AVAILABLE:
+    try:
+      reader = pypdf.PdfReader(pdf_path)
+      for page in reader.pages:
+        txt = page.extract_text() or ""
+        if txt:
+          raw_pages.append(txt)
+    except Exception:
+      pass
+
+  for page_txt in raw_pages:
+    page_titers = _extract_titers_from_text(page_txt)
+    if page_titers:
+      titers.extend(page_titers)
+
+  return titers
+
+
 # ==========================================
 # DATA INPUT MODES (Manual Entry / PDF Report)
 # ==========================================
@@ -267,33 +488,7 @@ else:  # Upload PDF Report Mode
       tmp_path = tmp.name
 
     try:
-      extracted_from_pdf = []
-      if PDFPLUMBER_AVAILABLE:
-        with pdfplumber.open(tmp_path) as pdf:
-          for page in pdf.pages:
-            txt = page.extract_text() or ""
-            lines = txt.split("\n")
-            for line in lines:
-              # Target lines that look like sample rows (e.g. starting with sample numbers or well codes like F01, G01)
-              if re.search(
-                  r"\b(0[1-9]|1[0-8]|[1-9])\b", line
-              ) and not line.startswith("Report:"):
-                numbers_in_line = re.findall(r"\b([1-9]\d{2,4})\b", line)
-                for num_str in numbers_in_line:
-                  val = float(num_str)
-                  # Filter strictly for valid ELISA titer ranges (100 to 45000)
-                  if 100 <= val <= 45000 and val not in extracted_from_pdf:
-                    extracted_from_pdf.append(val)
-
-        # Fallback if specific row parsing missed anything
-        if len(extracted_from_pdf) < 5:
-          all_nums = re.findall(r"\b([1-9]\d{3,4})\b", txt)
-          for num_str in all_nums:
-            val = float(num_str)
-            if 100 <= val <= 45000 and val not in extracted_from_pdf:
-              extracted_from_pdf.append(val)
-
-      titernumbers = extracted_from_pdf
+      titernumbers = parse_elisa_pdf(tmp_path)
       st.success(
           f"Successfully extracted {len(titernumbers)} titers from PDF!"
       )
