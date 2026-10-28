@@ -94,28 +94,13 @@ if not check_authentication():
   st.stop()
 
 # ==========================================
-# APP STYLING & VERTICAL PORTRAIT CAMERA CSS
+# APP STYLING
 # ==========================================
 st.markdown(
     """
     <style>
     .main { background-color: #eaf4f2; }
     .stButton>button { width: 100%; border-radius: 6px; font-weight: bold; min-height: 42px; }
-    
-    /* Force Camera Input into a clean Vertical (Portrait) Box */
-    [data-testid="stCameraInput"] {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        width: 100% !important;
-    }
-    [data-testid="stCameraInput"] video, [data-testid="stCameraInput"] img {
-        width: 100% !important;
-        max-width: 420px !important;
-        aspect-ratio: 3 / 4 !important;
-        object-fit: cover !important;
-        border-radius: 12px;
-    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -168,13 +153,13 @@ vaccine_choice = st.selectbox(
 )
 
 # ==========================================
-# DATA INPUT MODES (Manual / PDF / Camera)
+# DATA INPUT MODES (Manual / PDF / Native Camera)
 # ==========================================
 st.markdown("---")
 st.markdown("### 🧫 Titer Data Input")
 input_mode = st.radio(
     "Choose Input Method",
-    ["Manual Entry", "Upload PDF Report", "Capture Report with Camera"],
+    ["Manual Entry", "Upload PDF Report", "Capture with Native Camera"],
     horizontal=True,
 )
 
@@ -188,6 +173,7 @@ if input_mode == "Manual Entry":
       f"**Total Samples: {st.session_state.num_samples}** (Min required: 5)"
   )
 
+  # Control buttons layout
   row1_col1, row1_col2, row1_col3 = st.columns(3)
   with row1_col1:
     if st.button("➕ Add 1"):
@@ -238,40 +224,48 @@ if input_mode == "Manual Entry":
 
   st.markdown("<br>", unsafe_allow_html=True)
 
-  grid_cols = st.columns(2)
-  for i in range(st.session_state.num_samples):
-    col_idx = i % 2
-    key = f"t_val_{i}"
-    if key not in st.session_state:
-      default_demo = [
-          4500,
-          5200,
-          6100,
-          3800,
-          7200,
-          5900,
-          6400,
-          4100,
-          5500,
-          6800,
-          7000,
-          4800,
-      ]
-      st.session_state[key] = (
-          str(default_demo[i % len(default_demo)])
-          if i < len(default_demo)
-          else "5000"
+  # STRICT ROW-BY-ROW SEQUENTIAL GRID (1, 2, 3, 4, 5...)
+  for i in range(0, st.session_state.num_samples, 2):
+    row_cols = st.columns(2)
+
+    # First item in row
+    key1 = f"t_val_{i}"
+    if key1 not in st.session_state:
+      st.session_state[key1] = str(
+          [4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800][
+              i % 10
+          ]
       )
 
-    with grid_cols[col_idx]:
-      val_str = st.text_input(f"Sample #{i+1}", key=key)
-      if val_str.strip():
+    with row_cols[0]:
+      val_str1 = st.text_input(f"Sample #{i+1}", key=key1)
+      if val_str1.strip():
         try:
-          v = float(val_str.strip())
-          if v >= 0:
-            titers.append(v)
+          v1 = float(val_str1.strip())
+          if v1 >= 0:
+            titers.append(v1)
         except ValueError:
           pass
+
+    # Second item in row (if available)
+    if i + 1 < st.session_state.num_samples:
+      key2 = f"t_val_{i+1}"
+      if key2 not in st.session_state:
+        st.session_state[key2] = str(
+            [4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800][
+                (i + 1) % 10
+            ]
+        )
+
+      with row_cols[1]:
+        val_str2 = st.text_input(f"Sample #{i+2}", key=key2)
+        if val_str2.strip():
+          try:
+            v2 = float(val_str2.strip())
+            if v2 >= 0:
+              titers.append(v2)
+          except ValueError:
+            pass
 
 elif input_mode == "Upload PDF Report":
   uploaded_file = st.file_uploader("Upload ELISA PDF Report", type=["pdf"])
@@ -297,20 +291,25 @@ elif input_mode == "Upload PDF Report":
       if os.path.exists(tmp_path):
         os.remove(tmp_path)
 
-else:  # Vertical Camera Capture Mode for Mobile
+else:  # Native Mobile Camera App Mode
   st.markdown(
-      "📱 **Vertical Camera Mode:** Hold your phone vertically (portrait)"
-      " slightly back from the A4 paper so the text stays sharp and focused."
+      "📱 **Native Camera Capture:** Tap the button below to launch your phone's"
+      " built-in camera app. This lets you use your phone's native autofocus,"
+      " telephoto/macro lenses, pinch-to-zoom, and portrait orientation"
+      " perfectly."
   )
-  camera_image = st.camera_input("Capture A4 Report")
-  if camera_image:
-    img = Image.open(camera_image)
+
+  native_photo = st.file_uploader(
+      "📸 Take Photo with Phone Camera", type=["jpg", "jpeg", "png"]
+  )
+  if native_photo:
+    img = Image.open(native_photo)
     st.image(
         img,
-        caption="Captured Vertical Report Preview",
+        caption="Captured Native Report Photo",
         use_container_width=True,
     )
-    st.success("Photo captured successfully in portrait mode!")
+    st.success("Photo received from native camera app successfully!")
     titers = [4500, 5200, 6100, 3800, 7200, 5900, 6400, 4100, 5500, 6800]
 
 # ==========================================
